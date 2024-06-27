@@ -16,7 +16,9 @@ public:
     char string[82] = {0};
 
     char **answers = NULL;
-    unsigned long long answer_count = 0; //== APP: check the max number
+
+    //== create BigNumber class
+    unsigned long long answer_count = 0;
 
     // inline
     int itoy(int i) {

@@ -13,8 +13,6 @@
         return;       \
     }
 
-static char lastString[510];
-
 auto limitNumbRange = [](int &n, int min, int max) {
     if (n < min) {
         n = min;
@@ -96,6 +94,7 @@ void Sudoku::initConflicts() {
         }
     }
 };
+
 bool Sudoku::checkConflict(int indx, int digt) {
     // return true when the digit is enable (has no conflict)
     // check if the digit has no conflict (by comparing with committed digits of mates)
@@ -437,6 +436,7 @@ bool Sudoku::commitDigit(int indx, int digt, bool check) {
     //
     return true;
 };
+
 int Sudoku::seekDigit_destiny(int indx) {
     // 天选之子-别的格子都填不了这个数字
 
@@ -854,6 +854,7 @@ int Sudoku::crack(bool save_answers, bool print_answer_line_immediately) {
 int Sudoku::crack(bool save_answers) {
     return (crack(save_answers, false));
 };
+
 void Sudoku::addAnswer() {
     answer_count++;
     // alloc answers table mem
@@ -925,6 +926,7 @@ void Sudoku::getString(char *str) {
     }
     str[81] = '\0';
 }
+
 void Sudoku::printLineTo(char *user_buffer, char *str, char *ch_uncommitted_digit) {
     // print sudoku string in one line to the buffer
 
@@ -1020,14 +1022,17 @@ void Sudoku::printLineTo(char *user_buffer, char *str) {
 };
 void Sudoku::printLineTo(char *user_buffer) {
     char str[82];
+    getString(str);
     printLineTo(user_buffer, str, &ch_anyDigit);
 };
 
 void Sudoku::printLine(char *str) {
-    printLineTo(NULL, str);
+    printLineTo(NULL, str, &ch_anyDigit);
 };
 void Sudoku::printLine() {
-    printLineTo(NULL);
+    char str[82];
+    getString(str);
+    printLineTo(NULL, str, &ch_anyDigit);
 }
 
 void Sudoku::printPanelTo(char *user_buffer, char *str, int i_cur) {
@@ -1196,8 +1201,9 @@ void Sudoku::printPanelTo(char *user_buffer, char *str, int i_cur) {
         // print one line finished
         insertOne(' ');
         insertOne('\n');
-        insertOne('\0');
     }
+    // print \0
+    insertOne('\0');
 
     // return
     if (user_buffer == NULL) {
@@ -1236,6 +1242,7 @@ void Sudoku::printPanel() {
     //
     printPanelTo(NULL, str, -1);
 };
+
 void Sudoku::printAnswer(int i, bool panel_or_line) {
     //
     if (answer_count == 0) {
