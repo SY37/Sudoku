@@ -1,6 +1,7 @@
 ﻿
 
 #include <cstddef>
+#include <cstring>
 #define flag_conf_enableDigit 0
 #define flag_conf_disableDigit 1
 #define flag_crack_success 1
@@ -17,8 +18,8 @@ public:
 
     char **answers = NULL;
 
-    //== create BigNumber class
     unsigned long long answer_count = 0;
+    unsigned long long ans_c[2] = {0};
 
     // inline
     int itoy(int i) {
@@ -225,6 +226,109 @@ private:
     //== wait to optimize
     void addAnswer();
     void delAnswer(int i);
+    class BigNumb {
+    public:
+        static const unsigned long long _max_ = 10'000'000'000'000'000'000ull;
+        static void ppBigNumb(unsigned long long *big_numb) {
+            // big-numb ++
+
+            //
+            unsigned long long &low = big_numb[0];
+            unsigned long long &high = big_numb[1];
+            //
+            low++;
+            if (low >= _max_) {
+                low -= _max_;
+                high++;
+            }
+        };
+        static void mmBigNumb(unsigned long long *big_numb) {
+            // big-numb --
+
+            //
+            unsigned long long &low = big_numb[0];
+            unsigned long long &high = big_numb[1];
+            //
+            if (low == 0) {
+                high--;
+                low = _max_;
+            }
+            low--;
+        };
+        static void zeroBigNumb(unsigned long long *big_numb) {
+            // big-numb = {0}
+
+            //
+            unsigned long long &low = big_numb[0];
+            unsigned long long &high = big_numb[1];
+            //
+            low = 0;
+            high = 0;
+        };
+        static char *toString(char *e__str, unsigned long long *big_numb) {
+            // convert big-numb to string
+
+            // something will be used for this func
+            auto ulltos = [](char *e__s, unsigned long long ull) {
+                // convert unsigned-long-long to string
+
+                // array where to save numb string
+                char str[21] = {0};
+                char *c = &str[20];
+                *c = '\0';
+                // add one digit char to the array
+                auto insertC = [&c](int d) {
+                    c--;
+                    *c = d + '0';
+                };
+
+                // ull to string
+                if (ull == 0) {
+                    // set str to '0'
+                    insertC(0);
+                } else {
+                    // get numb string
+                    for (int i = 0; true; i++) {
+                        // numb ending
+                        if (ull == 0) {
+                            break;
+                        }
+                        // get the digit at the least place
+                        int d = ull % 10;
+                        insertC(d);
+                        // shift right by one place
+                        ull /= 10;
+                    }
+                }
+
+                // export numb string
+                strcpy(e__s, c);
+            };
+            unsigned long long &low = big_numb[0];
+            unsigned long long &high = big_numb[1];
+            char *str = e__str;
+
+            // new mem to save string
+            if (e__str == NULL) {
+                str = new char[20 + 20 + 1]();
+            };
+            // high-ull to string
+            if (high != 0) {
+                ulltos(str, high);
+            }
+            // low-ull to string
+            int high_len = strlen(str);
+            char *low_str = str + high_len;
+            ulltos(low_str, low);
+
+            // return string
+            if (e__str != NULL) {
+                e__str = str;
+            }
+            return str;
+        };
+    };
+
     void clrAnswers();
     int cleanAnswers();
     int cleanAnswers(int &before, int &after);

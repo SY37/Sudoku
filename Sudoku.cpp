@@ -667,12 +667,12 @@ bool Sudoku::seekDigits_zombie(bool is_initial_call, bool save_answers, bool pri
     // 行尸走肉-逐个尝试所有可用的数字
 
     // used var
-    static int LEVEL;                // the index of recursion, `0` is the initial-call
-    static int TRY;                  // the index of try
-    static unsigned long long COUNT; // the count of answers
-    char *bp_initial;                // sudoku before initial-call
-    int i = -1;                      // the cell will be tried to commit
-    int d = 1;                       // the digit will be tried
+    static int LEVEL;                         // the index of recursion, `0` is the initial-call
+    static int TRY;                           // the index of try
+    static unsigned long long COUNT[2] = {0}; // the count of answers
+    char *bp_initial;                         // sudoku before initial-call
+    int i = -1;                               // the cell will be tried to commit
+    int d = 1;                                // the digit will be tried
     // get the enable digits of the first uncommitted cell one-by-one
     auto getNextEnableDigit = [&]() {
         // initial time to get the first uncommitted cell index
@@ -747,13 +747,36 @@ bool Sudoku::seekDigits_zombie(bool is_initial_call, bool save_answers, bool pri
     };
     auto printAnswerImmediately = [this, &print_answer_immediately]() {
         if (true == print_answer_immediately) {
+            { //-- debug:
+                auto printTimePerCount = []() {
+                    // 1w answers need 3s
+                    CHECK_DEBUG;
+                    unsigned long long per = 10'000;
+                    if ((COUNT[0] % per) == 0) {
+                        static time_t t_last = time(NULL);
+                        static unsigned long long i = 0;
+
+                        //
+                        time_t t_now = time(NULL);
+                        unsigned long t = t_now - t_last;
+                        printf("[%lu~%lu:%lu] - %llu (*%llu) \n", t_last, t_now, t, ++i, per);
+                        //
+                        t_last = t_now;
+                    }
+                    return;
+                };
+                printTimePerCount();
+            } //-- debug;
+
             // copy sudoku
             char str[82];
             this->getString(str);
             Sudoku copy(str);
             // commit all certain digits
             bool b = copy.confirmDigits(false);
-            printf("[%llu] \n", COUNT);
+            char *count_str = BigNumb::toString(NULL, COUNT);
+            printf("[%s] \n", count_str);
+            delete[] count_str;
             copy.printPanel();
         }
     };
@@ -790,7 +813,7 @@ bool Sudoku::seekDigits_zombie(bool is_initial_call, bool save_answers, bool pri
         // set default var
         LEVEL = -1;
         TRY = -1;
-        COUNT = 0;
+        BigNumb::zeroBigNumb(COUNT);
         // clear previous answers
         clrAnswers();
         // backup the entry-time sudoku
@@ -806,7 +829,7 @@ bool Sudoku::seekDigits_zombie(bool is_initial_call, bool save_answers, bool pri
     // switch crack result
     switch (bingo) {
         case flag_crack_success :
-            COUNT++;
+            BigNumb::ppBigNumb(COUNT);
             printAnswerImmediately();
             return rtn__true();
             break;
@@ -857,6 +880,15 @@ int Sudoku::crack(bool save_answers) {
 
 void Sudoku::addAnswer() {
     answer_count++;
+
+    //-- BigNumb
+    BigNumb::ppBigNumb(ans_c);
+    // stop to record answer when the count is 1e19
+    if (ans_c[1] != 0) {
+        return;
+    }
+    //-- .
+
     // alloc answers table mem
     void *p = realloc(answers, answer_count * sizeof(void *));
     if (p == NULL) {
@@ -871,6 +903,15 @@ void Sudoku::addAnswer() {
     answers[answer_count - 1] = ans;
 }
 void Sudoku::delAnswer(int i_) {
+    //-- BigNumb
+    BigNumb::mmBigNumb(ans_c);
+    // stop to record answer when the count is 1e19
+    if (ans_c[1] != 0) {
+        answer_count--;
+        return;
+    }
+    //-- .
+
     // free answer mem
     delete[] answers[i_];
     // reorder answers table
@@ -1318,7 +1359,7 @@ void printAllSudoku() {
 
     //
     unsigned long t = t2 - t1;
-    printf("%lu\n%lu\n%lu\n", t1, t2, t);
+    printf("Time: %lu~%lu=%lu \n", t1, t2, t);
 }
 
 int main(int argc, char *argv[]) {
