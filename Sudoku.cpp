@@ -1,79 +1,99 @@
 ﻿
 #include "Sudoku.hpp"
-#include <cstddef>
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
-#include <ctime>
 
-#define DEBUG 0
+CSudoku::CSudoku() {
 
-#define CHECK_DEBUG   \
-    if (DEBUG != 1) { \
-        return;       \
-    }
+    // initialize conflicts
+    initConflicts();
+}
+CSudoku::CSudoku(char *str)
+    : CSudoku() {
 
-auto limitNumbRange = [](int &n, int min, int max) {
-    if (n < min) {
-        n = min;
-    }
-    if (n > max) {
-        n = max;
-    }
-};
+    readin(str);
+}
+bool CSudoku::readin(const char *sudoku_str) {
+    // load sudoku from the string and returns false when the digit-char count is less then 81 or when the sudoku is not right
 
-bool Sudoku::readin(const char *sudoku_str) {
-    auto DEBUG_readin_bad = [this](int i, int d) {
-        CHECK_DEBUG;
-        printf("\n"
-               "@@ @readin_badDigitAt@ [%d:%d] \n"
-               "@@: \n",
-               i, d);
-        printPanel();
-        printf("\n");
-    };
-    // if char is digit or the specified char meaning any digit
-    auto isAllowedDigit = [this](char ch) {
-        if (('1' <= ch) && (ch <= '9'))
+    auto ch2d = [](char ch) {
+        // if the char is a digit then returns its value or `-1`
+
+        if (('0' <= ch) && (ch <= '9')) {
             return (int)(ch - '0');
-        if ((ch == '0') || (ch == this->ch_anyDigit))
-            return 0;
+        }
+
         return -1;
     };
 
-    // backup sudoku
-    char bp[82];
-    getString(bp);
+    auto checkDigit = [&](int indx, int digt) {
+        // compare the digit of self and mates, and return `true` if the digit is enabled.
+        // must (1 <= digit <= 9)
+        if (digt == 0) {
+            return true;
+        }
 
-    // initialize conflicts
+        // each range
+        for (int r = RANGE_ROW; r <= RANGE_BLO; r++) {
+            // the index of the 1st cell in this range
+            int first_i = rangeFirst(indx, r);
+            // each mate-cell in this range
+            for (int n = 0; n < 9; n++) {
+                // index of mate-cell
+                int mate_i = inRange(first_i, n, r);
+                // skip self
+                if (mate_i == indx) {
+                    continue;
+                };
+                // found conflict
+                if (digt == getDigit(mate_i)) {
+                    // return the digit is not enabled
+                    return false;
+                };
+            }
+        }
+        // return the digit is enabled
+        return true;
+    };
+
+    if (sudoku_str == NULL) {
+        return false;
+    }
+
+    // backup sudoku (for reverting sudoku if the string is invalid)
+    char bp[82];
+    toString(bp);
+
+    // initialize conflicts (to clear the conflicts of the previous sudoku)
     initConflicts();
 
     // readin
     const char *pch = sudoku_str;
-    int digit;
+    int digit, index;
     int count = 0;
-    bool bad_sudoku = false;
+    bool BAD_SUDOKU = false;
     for (count = 0; true;) {
-        // get digit
-        digit = isAllowedDigit(*pch++);
-        // if the char is digit then readin
-        int i = count;
+        // get one digit from input string
+        digit = ch2d(*pch);
+        pch++;
+        // commit this digit
         if (digit >= 0) {
-            if (false == commitDigit(i, digit, true)) {
-                bad_sudoku = true;
-                DEBUG_readin_bad(i, digit);
+            index = count;
+            count++;
+            // the digit conflicts with some matecell
+            if (false == checkDigit(index, digit)) {
+                BAD_SUDOKU = true;
                 break;
             }
-            count++;
+            // commit this digit
+            commitCell(index, digit);
         }
-        // break when: 81 digits has been readin / sudoku string ended
+        // readin finished when 81 digits has been readin or when the string ended
         if ((count == 81) || (*pch == '\0')) {
             break;
         }
     }
 
     // readin failed
-    if ((count < 81) || (bad_sudoku == true)) {
+    if ((count < 81) || (BAD_SUDOKU == true)) {
         // revert sudoku
         readin(bp);
         // return
@@ -82,11 +102,13 @@ bool Sudoku::readin(const char *sudoku_str) {
     // readin succeed
     return true;
 }
-void Sudoku::initConflicts() {
+void CSudoku::initConflicts() {
     for (int y = 0; y < 9; y++) {
         for (int x = 0; x < 9; x++) {
             for (int d = 0; d < 9; d++) {
-                conflicts[y][x][d][0] = flag_conf_enableDigit;
+                // the digit is enabled
+                conflicts[y][x][d][0] = DIGIT_ENABLED;
+                // no conflict cells(index)
                 conflicts[y][x][d][1] = -1;
                 conflicts[y][x][d][2] = -1;
                 conflicts[y][x][d][3] = -1;
@@ -94,1082 +116,361 @@ void Sudoku::initConflicts() {
         }
     }
 };
+void CSudoku::clrOrMarkMates(int indx, bool clrOrMark, int prev_digit) {
+    // clear status of of mate-cells and set digit to `0`
 
-bool Sudoku::checkConflict(int indx, int digt) {
-    // return true when the digit is enable (has no conflict)
-    // check if the digit has no conflict (by comparing with committed digits of mates)
+    bool &clrMode = clrOrMark;
+    int now_digt = getDigit(indx);
 
-    //
-    limitNumbRange(digt, 0, 9);
-    if (digt == 0) {
-        return true;
-    }
-    //
-    if (false == checkConflict_row(indx, digt, NULL)) {
-        return false;
-    }
-    if (false == checkConflict_col(indx, digt, NULL)) {
-        return false;
-    }
-    if (false == checkConflict_blo(indx, digt, NULL)) {
-        return false;
-    }
-    return true;
-};
-bool Sudoku::checkConflict_row(int indx, int digt, int *conflict_i) {
-    // return true when the digit is enable (has no conflict)
-    // check if the digit has no conflict (by comparing with committed digit of mates) and export index of conflict-cell
-
-    limitNumbRange(digt, 0, 9);
-    if (digt == 0) {
-        return true;
-    }
-
-    // get x y
-    int y, x;
-    itoxy(y, x, indx);
-
-    // check if any row mate has the same digit
-    for (int mate_x = 0; mate_x < 9; mate_x++) {
-        // skip self
-        if (mate_x == x) {
-            continue;
-        }
-        //
-        int mate_y = y;
-        int mate_digt = digits[mate_y][mate_x];
-        // mate has the same digit
-        if (mate_digt == digt) {
-            // export mate index
-            if (conflict_i != NULL) {
-                int mate_i = xytoi(mate_y, mate_x);
-                *conflict_i = mate_i;
-            }
-            // return digit is disable
-            return false;
-        }
-    }
-    // return digit is enable
-    return true;
-};
-bool Sudoku::checkConflict_col(int indx, int digt, int *conflict_i) {
-    //
-    limitNumbRange(digt, 0, 9);
-    if (digt == 0) {
-        return true;
-    }
-
-    // get x y
-    int y, x;
-    itoxy(y, x, indx);
-
-    // check if any mate has the same digit
-    for (int mate_y = 0; mate_y < 9; mate_y++) {
-        // skip self
-        if (mate_y == y) {
-            continue;
-        }
-        //
-        int mate_x = x;
-        int mate_digt = digits[mate_y][mate_x];
-        // mate has the same digit
-        if (mate_digt == digt) {
-            // export mate index
-            if (conflict_i != NULL) {
-                int mate_i = xytoi(mate_y, mate_x);
-                *conflict_i = mate_i;
-            }
-            // return digit is disable
-            return false;
-        }
-    }
-    // return digit is enable
-    return true;
-};
-bool Sudoku::checkConflict_blo(int indx, int digt, int *conflict_i) {
-    //
-    limitNumbRange(digt, 0, 9);
-    if (digt == 0) {
-        return true;
-    }
-
-    // get b bi
-    int b, bi;
-    itobbi(b, bi, indx);
-
-    // check if any mate has the same digit
-    for (int mate_bi = 0; mate_bi < 9; mate_bi++) {
-        // skip self
-        if (mate_bi == bi) {
-            continue;
-        }
-        //
-        int mate_b = b;
-        int mate_i;
-        mate_i = btoi(mate_b, mate_bi);
-        int mate_y, mate_x;
-        itoxy(mate_y, mate_x, mate_i);
-        int mate_digt = digits[mate_y][mate_x];
-        // mate has the same digit
-        if (mate_digt == digt) {
-            // export mate index
-            if (conflict_i != NULL) {
-                *conflict_i = mate_i;
-            }
-            // return digit is disable
-            return false;
-        }
-    }
-    // return digit is enable
-    return true;
-};
-bool Sudoku::setConflict(int indx_self, int digt, int indx_conf) {
-    if (indx_self == indx_conf) {
-        return false;
-    }
-    // get position
-    int self_x, self_y, self_b, self_bi;
-    itoxy(self_y, self_x, indx_self);
-    itobbi(self_b, self_bi, indx_self);
-    int conf_x, conf_y, conf_b, conf_bi;
-    itoxy(conf_y, conf_x, indx_conf);
-    itobbi(conf_b, conf_bi, indx_conf);
-
-    // mark conflict
-    int range;
-    bool marked = false;
-    auto mark = [&]() {
-        marked = true;
-        conflicts[self_y][self_x][digt - 1][0] = flag_conf_disableDigit;
-        conflicts[self_y][self_x][digt - 1][range] = indx_conf;
-    };
-    if (self_y == conf_y) {
-        range = 1;
-        mark();
-    }
-    if (self_x == conf_x) {
-        range = 2;
-        mark();
-    }
-    if (self_b == conf_b) {
-        range = 3;
-        mark();
-    }
-
-    // return true when marked any conflict
-    // return false when self-cell and conf-cell has none same range
-    return marked;
-};
-void Sudoku::markMatesConflicts(int indx_self, int digt) {
-    if (digt == 0) {
-        clrMatesConflicts(indx_self);
-        return;
-    }
-    markMatesConflict_row(indx_self, digt);
-    markMatesConflict_col(indx_self, digt);
-    markMatesConflict_blo(indx_self, digt);
-};
-void Sudoku::markMatesConflict_row(int indx_self, int digt) {
-    //
-    int self_x, self_y, self_i;
-    self_i = indx_self;
-    itoxy(self_y, self_x, indx_self);
-
-    //
-    int mate_y = self_y;
-    for (int mate_x = 0; mate_x < 9; mate_x++) {
-        // skip cell-self
-        if (mate_x == self_x) {
-            continue;
-        }
-        // mark conflicts
-        int mate_i = xytoi(mate_y, mate_x);
-        setConflict(mate_i, digt, self_i);
-    }
-};
-void Sudoku::markMatesConflict_col(int indx_self, int digt) {
-    //
-    int self_x, self_y, self_i;
-    self_i = indx_self;
-    itoxy(self_y, self_x, indx_self);
-
-    //
-    int mate_x = self_x;
-    for (int mate_y = 0; mate_y < 9; mate_y++) {
-        // skip cell-self
-        if (mate_y == self_y) {
-            continue;
-        }
-        // mark conflicts
-        int mate_i = xytoi(mate_y, mate_x);
-        setConflict(mate_i, digt, self_i);
-    }
-};
-void Sudoku::markMatesConflict_blo(int indx_self, int digt) {
-    //
-    int self_b, self_bi, self_i;
-    self_i = indx_self;
-    itobbi(self_b, self_bi, indx_self);
-
-    //
-    int mate_b = self_b;
-    for (int mate_bi = 0; mate_bi < 9; mate_bi++) {
-        // skip cell-self
-        if (mate_bi == self_bi) {
-            continue;
-        }
-        // mark conflicts
-        int mate_i = btoi(mate_b, mate_bi);
-        setConflict(mate_i, digt, self_i);
-    }
-};
-void Sudoku::clrMatesConflicts(int indx) {
-    // none conflict mates
-    int d = getDigit(indx);
-    if (d == 0) {
+    // the previous digit is `0`, this means it marked no status before, so nothing need to do.
+    if ((clrMode == true) && (prev_digit == 0)) {
         return;
     }
 
-    // get cell-self position
-    int self_i = indx;
-    int self_x, self_y, self_b, self_bi;
-    itoxy(self_y, self_x, self_i);
-    itobbi(self_b, self_bi, self_i);
+    // clear or mark this digit status of mate-cells
+    auto clrOrMarkStatus = [&](int mate_i, int range) {
+        // clr mode
+        if (clrMode == true) {
+            // if the digit of mate-cell was disabled by self-cell then cancel it
+            if (indx == getStatus(mate_i, prev_digit, range)) {
+                setStatus(mate_i, prev_digit, range, -1);
+            }
+            // check if the digit is available now
+            if (-1 == getStatus(mate_i, prev_digit, RANGE_ROW)) {
+                if (-1 == getStatus(mate_i, prev_digit, RANGE_COL)) {
+                    if (-1 == getStatus(mate_i, prev_digit, RANGE_BLO)) {
+                        setStatus(mate_i, prev_digit, 0, DIGIT_ENABLED);
+                    };
+                };
+            };
+        }
+        // mark mode
+        else {
+            // mark this digit disabled by self-cell
+            setStatus(mate_i, now_digt, range, indx);
+            // mark this digit status of mate-cell as disabled
+            setStatus(mate_i, now_digt, 0, DIGIT_DISABLED);
+        }
+    };
 
-    // clean
-    int r;
-    int di = d - 1;
-    // row
-    r = 1;
-    for (int mate_x = 0; mate_x < 9; mate_x++) {
-        // skip cell-self
-        if (mate_x == self_x) {
-            continue;
+    /* auto eachRowMates = [&](int self_i) {
+        int first_i = firstRi(self_i);
+        for (int i = 0; i < 9; i++) {
+            int mate_i = inRow(first_i, i);
+            if (mate_i == self_i) {
+                continue;
+            }
+            clrOrMarkStatus(mate_i, RANGE_ROW);
         }
-        // clean mates conflicts
-        int mate_y = self_y;
-        if (self_i == getRowConflict(mate_y, mate_x, d)) {
-            conflicts[mate_y][mate_x][di][r] = -1;
+    };
+    auto eachColMates = [&](int self_i) {
+        int first_i = firstCi(self_i);
+        for (int i = 0; i < 9; i++) {
+            int mate_i = inCol(first_i, i);
+            if (mate_i == self_i) {
+                continue;
+            }
+            clrOrMarkStatus(mate_i, RANGE_COL);
         }
-        // amend conflict flag
-        if ((getColConflict(mate_y, mate_x, d) == -1) &&
-            (getBloConflict(mate_y, mate_x, d) == -1)) {
-            conflicts[mate_y][mate_x][di][0] = flag_conf_enableDigit;
+    };
+    auto eachBloMates = [&](int self_i) {
+        int first_i = firstBi(self_i);
+        for (int i = 0; i < 9; i++) {
+            int mate_i = inBlo(first_i, i);
+            if (mate_i == self_i) {
+                continue;
+            }
+            clrOrMarkStatus(mate_i, RANGE_BLO);
         }
-    }
-    // col
-    r = 2;
-    for (int mate_y = 0; mate_y < 9; mate_y++) {
-        // skip cell-self
-        if (mate_y == self_y) {
-            continue;
-        }
-        // clean mates conflicts
-        int mate_x = self_x;
-        if (self_i == getColConflict(mate_y, mate_x, d)) {
-            conflicts[mate_y][mate_x][di][r] = -1;
-        }
-        // amend conflict flag
-        if ((getRowConflict(mate_y, mate_x, d) == -1) &&
-            (getBloConflict(mate_y, mate_x, d) == -1)) {
-            conflicts[mate_y][mate_x][di][0] = flag_conf_enableDigit;
-        }
-    }
-    // blo
-    r = 3;
-    for (int mate_bi = 0; mate_bi < 9; mate_bi++) {
-        // skip cell-self
-        if (mate_bi == self_bi) {
-            continue;
-        }
-        // clean mates conflicts
-        int mate_b = self_b;
-        int mate_i = btoi(mate_b, mate_bi);
-        int mate_y, mate_x;
-        itoxy(mate_y, mate_x, mate_i);
-        if (self_i == getBloConflict(mate_y, mate_x, d)) {
-            conflicts[mate_y][mate_x][di][r] = -1;
-        }
-        // amend conflict flag
-        if ((getColConflict(mate_y, mate_x, d) == -1) &&
-            (getRowConflict(mate_y, mate_x, d) == -1)) {
-            conflicts[mate_y][mate_x][di][0] = flag_conf_enableDigit;
-        }
-    }
-};
-bool Sudoku::checkDigit_byMarks(int indx, int digt) {
-    // get position
-    int x, y;
-    itoxy(y, x, indx);
+    };
 
-    // check if this digit marked by any mate
-    if (flag_conf_disableDigit == conflicts[y][x][digt - 1][0]) {
-        // someone mate has marked this digit
-        // so this digit is disable for this cell
-        return false;
-    } else {
-        // nobody marked this digit
-        // this digit is enable for this cell
-        return true;
+    // clear or mark mate-cells digit status
+    eachRowMates(indx);
+    eachColMates(indx);
+    eachBloMates(indx);
+ */
+
+    for (int range = RANGE_ROW; range <= RANGE_BLO; range++) {
+        int first_i = rangeFirst(indx, range);
+        for (int i = 0; i < 9; i++) {
+            int mate_i = inRange(first_i, i, range);
+            if (mate_i == indx) {
+                continue;
+            }
+            clrOrMarkStatus(mate_i, range);
+        }
     }
 };
-bool Sudoku::commitDigit(int indx, int digt, bool check) {
-    // get position
-    int d, i, x, y;
-    i = indx;
-    d = digt;
-    itoxy(y, x, i);
+int CSudoku::seekDigit(int cell_index) {
+    // returns the certain digit of the cell or `0` if the digit is unsure or `-1` if the cell is dead.
 
-    // check conflict that any mate is this digit
-    if (false == checkConflict(indx, d)) {
-        return false;
+    int indx = cell_index;
+
+    // get all enabled digits of this cell
+    int enabled_digits[9] = {0};
+    int enabled_count = 0;
+    for (int d = 1; d <= 9; d++) {
+        if (DIGIT_ENABLED == getStatus(indx, d, 0)) {
+            enabled_digits[enabled_count] = d;
+            enabled_count++;
+        }
     }
 
-    // commit digit
-    digits[y][x] = d;
+    // this cell has no enabled digit, means sudoku is not right
+    if (enabled_count == 0) {
+        return SUDOKU_BAD;
+    }
 
-    // mark mates conflicts
-    if (d != 0) {
-        markMatesConflicts(i, d);
+    // Fate: only one enabled digit left, so confirm this digit
+    if (enabled_count == 1) {
+        return enabled_digits[0];
+    }
+
+    // Destiny: check if the enabled digit was disabled in all mate-cells
+    for (int enabled_i = 0; enabled_i < enabled_count; enabled_i++) {
+        // get one enabled digit
+        int digit = enabled_digits[enabled_i];
+        // check if all mate-cells within the same range disable this digit
+        auto ifAllRangeMatesDisabled = [&](int range) {
+            int first_i = rangeFirst(indx, range);
+            for (int i = 0; i < 9; i++) {
+                int mate_i = inRange(first_i, i, range);
+                if (mate_i != indx) {
+                    if (true == isDigitEnabled(mate_i, digit)) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        };
+        for (int range = RANGE_ROW; range <= RANGE_BLO; range++) {
+            // all range-mate-cells disable this digit
+            if (true == ifAllRangeMatesDisabled(range)) {
+                return digit;
+            };
+        }
+    }
+
+    // cannot confirm any digit
+    return SUDOKU_UNSURE;
+};
+void CSudoku::commitCell(int cell_index, int digit_to_commit) {
+    // commit a new digit to the cell and clear the previous digit-conflict-status of mate-cells
+    // notice that this func doesnot check if the digit to be committed is enabled
+
+    int indx = cell_index;
+    int digt = digit_to_commit;
+    int prev_d = getDigit(indx);
+    int new_d = digt;
+
+    // clear previous digit status of mate-cells when the previous digit isnot `0`
+    if (prev_d != 0) {
+        // clear previous digit status of all mate-cells
+        clrMatesStatus(indx, prev_d);
+    }
+
+    // set the new digit to digit-member
+    setDigit(indx, digt);
+
+    // mark the new non-zero digit status of mate-cells
+    if (new_d != 0) {
+        markMatesStatus(indx);
     }
 
     //
-    return true;
+    return;
 };
-
-int Sudoku::seekDigit_destiny(int indx) {
-    // 天选之子-别的格子都填不了这个数字
-
-    // get cell-self position
-    int self_x, self_y, self_i;
-    self_i = indx;
-    itoxy(self_y, self_x, self_i);
-    int self_b, self_bi;
-    itobbi(self_b, self_bi, self_i);
-
-    // check if the digit is destiny in the row
-    auto destinyDigitInRow = [this, &self_x, &self_y](int d) {
-        bool im_destiny = true;
-        for (int mate_x = 0; mate_x < 9; mate_x++) {
-            // skip cell-self
-            if (mate_x == self_x) {
-                continue;
-            }
-            // get cell-mate
-            int mate_y = self_y;
-            int mate_i = xytoi(mate_y, mate_x);
-            // if digit is enable for cell-mate then cell-self isnt destiny
-            if (true == checkDigit_byMarks(mate_i, d)) {
-                im_destiny = false;
-                break;
-            }
-        }
-        // return
-        if (im_destiny == true) {
-            return d;
-        } else {
-            return -1;
-        }
-    };
-    // check if the digit is destiny in the col
-    auto destinyDigitInCol = [this, &self_x, &self_y](int d) {
-        bool im_destiny = true;
-        for (int mate_y = 0; mate_y < 9; mate_y++) {
-            // skip cell-self
-            if (mate_y == self_y) {
-                continue;
-            }
-            //
-            int mate_x = self_x;
-            int mate_i = xytoi(mate_y, mate_x);
-            if (true == checkDigit_byMarks(mate_i, d)) {
-                im_destiny = false;
-                break;
-            }
-        }
-        if (im_destiny == true) {
-            return d;
-        } else {
-            return -1;
-        }
-    };
-    // check if the digit is destiny in the blo
-    auto destinyDigitInBlo = [this, &self_b, &self_bi](int d) {
-        bool im_destiny = true;
-        for (int mate_bi = 0; mate_bi < 9; mate_bi++) {
-            // skip cell-self
-            if (mate_bi == self_bi) {
-                continue;
-            }
-            //
-            int mate_b = self_b;
-            int mate_i = btoi(mate_b, mate_bi);
-            if (true == checkDigit_byMarks(mate_i, d)) {
-                im_destiny = false;
-                break;
-            }
-        }
-        if (im_destiny == true) {
-            return d;
-        } else {
-            return -1;
-        }
-    };
-    // seek destiny digit
-    for (int d = 1; d <= 9; d++) {
-        // skip disable digits
-        if (false == isDigitEnable(self_i, d)) {
-            continue;
-        }
-
-        // seek
-        int destiny;
-        // seek row digit
-        destiny = destinyDigitInRow(d);
-        if (destiny != -1) {
-            return destiny;
-        }
-        // seek col digit
-        destiny = destinyDigitInCol(d);
-        if (destiny != -1) {
-            return destiny;
-        }
-        // seek blo digit
-        destiny = destinyDigitInBlo(d);
-        if (destiny != -1) {
-            return destiny;
-        }
-    }
-
-    // none sought
-    return -1;
-};
-int Sudoku::seekDigit_fate(int indx) {
-    // 逼上梁山-只剩下这个数字可以填
-
-    // get position
-    int x, y, i;
-    i = indx;
-    itoxy(y, x, i);
-
-    // seek fate digit
-    int fate = -1;
-    for (int d = 1; d <= 9; d++) {
-        if (true == isDigitEnable(i, d)) {
-            if (fate == -1) {
-                // record the first enable digit
-                fate = d;
-            } else {
-                // find the second enable digit
-                // means no fate digit
-                fate = -1;
-                break;
-            }
-        }
-    }
-
-    // return
-    return fate;
-};
-int Sudoku::confirmDigits() {
-    // commit all ascertainable digits and save answer if all digits was comitted
-
-    return (confirmDigits(true));
-};
-int Sudoku::confirmDigits(bool save_answer_if_succeed) {
-    // confirm all certain digits of sudoku and commit them all
+CSudoku::EnumSudokuStatus CSudoku::commitAllCertains() {
+    // commit all certain digits of the sudoku
+    // returns `0` when some cells cannt be committed or `-1` when the sudoku isnot right or `1` when all cells were committed.
 
     // var
-    int committed = 0;
-    bool new_commit = false;
-    bool bad_sudoku = false;
+    int new_committed = 0;
+    int all_committed = 0;
 
-    // crack sudoku
-CRACK_AGAIN:
-    // printf("\n\nCrack Again\n");
+    // scan sudoku panel to seek all ascertainable digits of cells
+    bool AGAIN = false;
     for (int i = 0; i < 81; i++) {
-        // skip committed cells
         int d = getDigit(i);
-        if (d != 0) {
-            // check if this committed digit is wrong
-            // (maybe modified by 3rd, cos this app will not commit wrong digits)
-            /* if (false == checkConflict(i, d)) {
-                bad_sudoku = true;
-                break;
-            } */
-            // printPanel();
-            committed++;
-            continue;
+        if (d == 0) {
+            int certain_d = seekDigit(i);
+            // sudoku isnot right
+            if (certain_d == SUDOKU_BAD) {
+                return SUDOKU_BAD; // func failed, cos the sudoku is not right
+            }
+            // found certain digit
+            if (certain_d > 0) {
+                commitCell(i, certain_d);
+                new_committed++;
+                all_committed++;
+                AGAIN = true; // mark to scan again
+            }
+        } else {
+            // check if this digit committed is wrong
+            if (false == isDigitEnabled(i, d)) {
+                return SUDOKU_BAD;
+            }
+
+            all_committed++;
         }
-
-        // check if the sudoku is bad
-        if (true == isBadCell(i)) {
-            bad_sudoku = true;
-            break;
-        }
-
-        // seek digit
-        auto commit = [&]() {
-            bool b = commitDigit(i, d, true);
-            committed++;
-            new_commit = true;
-        };
-
-        // fate
-        d = seekDigit_fate(i);
-        if (d != -1) {
-            commit();
-            continue;
-        }
-
-        // destiny
-        d = seekDigit_destiny(i);
-        if (d != -1) {
-            commit();
-            continue;
+        // sacn the panel again when any new certain digit has been committed
+        if ((i == 80) && (AGAIN == true)) {
+            // reset flag
+            AGAIN = false;
+            i = -1;
+            all_committed = 0;
         }
     }
-    // crack again when new digit has been committed and the sudoku is not bad
-    if ((new_commit == true) && (bad_sudoku == false)) {
-        new_commit = false;
-        committed = 0;
-        goto CRACK_AGAIN;
-    }
 
-    if (bad_sudoku == true) {
-        return flag_crack_bad;
-    }
-    if (committed == 81) { // every cell has been committed
-        if (true == save_answer_if_succeed) {
-            addAnswer();
-        }
-        return flag_crack_success;
-    } else { // some cells dont commit
-        return flag_crack_unsure;
-    }
-};
-int Sudoku::confirmDigits_try() {
-    // write nothing to the sudoku
-    // just get the return
-    // and without saving answer if succeed
-
-    // backup
-    char bp[82];
-    getString(bp);
-    // crack
-    int rtn = confirmDigits(false);
-    // recover
-    readin(bp);
     // return
-    return rtn;
+    if (all_committed == 81) {
+        // success
+        return SUDOKU_BINGO;
+    } else {
+        // failed
+        return SUDOKU_UNSURE;
+    }
 };
-bool Sudoku::seekDigits_zombie(bool is_initial_call, bool save_answers, bool print_answer_immediately) {
-    // 行尸走肉-逐个尝试所有可用的数字
+bool CSudoku::crack(bool init_recursion) {
 
-    // used var
-    static int LEVEL;                         // the index of recursion, `0` is the initial-call
-    static int TRY;                           // the index of try
-    static unsigned long long COUNT[2] = {0}; // the count of answers
-    char *bp_initial;                         // sudoku before initial-call
-    int i = -1;                               // the cell will be tried to commit
-    int d = 1;                                // the digit will be tried
-    // get the enable digits of the first uncommitted cell one-by-one
-    auto getNextEnableDigit = [&]() {
-        // initial time to get the first uncommitted cell index
-        if (i == -1) {
-            for (i = 0; i < 81; i++) {
-                // skip committed cells
-                d = getDigit(i);
-                if (d == 0) {
+    static int answer_count;
+    static int last_tried_indx;
+    static int lv;
+    if (init_recursion == true) {
+        last_tried_indx = -1;
+        lv = -1;
+    }
+
+    lv++;
+    bool FOUND = false;
+    int sudoku_status;
+    sudoku_status = commitAllCertains();
+    switch (sudoku_status) {
+        // failed
+        case SUDOKU_BAD :
+            FOUND = false;
+            break;
+        // success
+        case SUDOKU_BINGO :
+            if (__whenCrackBingo == NULL) {
+                __whenCrackBingo = __whenCrackBingo_;
+            }
+            __whenCrackBingo(this);
+            FOUND = true;
+            break;
+        // Zombie: guess all enabled digit of one cell
+        case SUDOKU_UNSURE :
+            // get the next uncommitted cell index
+            int indx = -1;
+            for (int i = last_tried_indx + 1; i < 81; i++) {
+                if (0 == getDigit(i)) {
+                    indx = i;
                     break;
                 }
             }
-            // initial digit
-            d = 0;
-        }
-        // get the next enable digit
-        d++;
-        for (; d <= 9; d++) {
-            // skip disable digits
-            if (true == isDigitEnable(i, d)) {
-                return;
+            if (indx == -1) {
+                break;
             }
-        }
-        // no more enable digit
-        d = -1;
-    };
-    auto DEBUG_zombie_crack_result = [](int rtn_crack) {
-        CHECK_DEBUG;
-        char succeed[] = "succeed ^_^";
-        char bad[] = "bad -_-";
-        char unsure[] = "unsure O_O";
-        char *s;
-        switch (rtn_crack) {
-            case flag_crack_success :
-                s = succeed;
-                break;
-            case flag_crack_bad :
-                s = bad;
-                break;
-            case flag_crack_unsure :
-                s = unsure;
-                break;
-        }
-        //[LEVEL:TRY]
-        printf("\n"
-               "@@ @zombie_crack@ [%d:%d] \n"
-               "@@:%s \n"
-               "\n",
-               LEVEL, TRY, s);
-    };
-    auto DEBUG_zombie_committing_digit = [this](int i, int d) {
-        CHECK_DEBUG;
-        int x, y;
-        itoxy(y, x, i);
-        char dbg[82];
-        getString(dbg);
-        dbg[i + 1] = 0;
-        //[i;y:x;d]
-        printf("\n"
-               "@@ @zombie_commit@ [%d;%d:%d;%d] \n"
-               "@@:",
-               i, y, x, d);
-        printLine(dbg);
-        printf("\n");
-    };
-    auto DEBUG_zombie_result = [](int c_now, int c_all, int c_rept) {
-        CHECK_DEBUG;
-        //[now;all:rept]
-        printf("\n"
-               "@@ @zombie_result@ [%d;%d:%d] \n"
-               "\n",
-               c_now, c_all, c_rept);
-    };
-    auto printAnswerImmediately = [this, &print_answer_immediately]() {
-        if (true == print_answer_immediately) {
-            { //-- debug:
-                auto printTimePerCount = []() {
-                    // 1w answers need 3s
-                    CHECK_DEBUG;
-                    unsigned long long per = 10'000;
-                    if ((COUNT[0] % per) == 0) {
-                        static time_t t_last = time(NULL);
-                        static unsigned long long i = 0;
-
-                        //
-                        time_t t_now = time(NULL);
-                        unsigned long t = t_now - t_last;
-                        printf("[%lu~%lu:%lu] - %llu (*%llu) \n", t_last, t_now, t, ++i, per);
-                        //
-                        t_last = t_now;
+            // get one enabled digit of this cell
+            for (int digt = 1; digt <= 9; digt++) {
+                if (true == isDigitEnabled(indx, digt)) {
+                    // backpu current sudoku
+                    char *bp = new char[81];
+                    toString(bp);
+                    // try to crack with this digit
+                    commitCell(indx, digt);
+                    last_tried_indx = indx;
+                    bool b = crack(false);
+                    if (b == true) {
+                        FOUND = true;
                     }
-                    return;
+                    lv--;
+                    // recover sudoku
+                    readin(bp);
+                    delete[] bp;
                 };
-                printTimePerCount();
-            } //-- debug;
-
-            // copy sudoku
-            char str[82];
-            this->getString(str);
-            Sudoku copy(str);
-            // commit all certain digits
-            bool b = copy.confirmDigits(false);
-            char *count_str = BigNumb::toString(NULL, COUNT);
-            printf("[%s] \n", count_str);
-            delete[] count_str;
-            copy.printPanel();
-        }
-    };
-    auto rtn__ = [&](bool r) {
-        // final-return
-        if (LEVEL == 0) {
-            // recover sudoku
-            readin(bp_initial);
-            // delete repeated answers
-            int c_all, c_now, c_repeat;
-            c_repeat = cleanAnswers(c_all, c_now);
-            DEBUG_zombie_result(c_now, c_all, c_repeat);
-            // pre-return
-            if (r == true) {
-                ;
-            } else {
-                ;
             }
-        }
-        // recover recursion level
-        LEVEL--;
-        // return
-        return r;
-    };
-    auto rtn__true = [&]() {
-        return rtn__(true);
-    };
-    auto rtn__false = [&]() {
-        return rtn__(false);
-    };
-
-    // initial-call
-    if (is_initial_call == true) {
-        // set default var
-        LEVEL = -1;
-        TRY = -1;
-        BigNumb::zeroBigNumb(COUNT);
-        // clear previous answers
-        clrAnswers();
-        // backup the entry-time sudoku
-        bp_initial = new char[82];
-        getString(bp_initial);
-    }
-
-    // update recursion level
-    LEVEL++;
-    // crack
-    int bingo = confirmDigits(save_answers);
-    DEBUG_zombie_crack_result(bingo);
-    // switch crack result
-    switch (bingo) {
-        case flag_crack_success :
-            BigNumb::ppBigNumb(COUNT);
-            printAnswerImmediately();
-            return rtn__true();
-            break;
-        case flag_crack_bad :
-            return rtn__false();
-            break;
-        case flag_crack_unsure :
-            // assume zombie-on failed
-            bool zombie_secceed = false;
-            // zombie-one, try to commit each enable digit
-            while (true) {
-                // get one digit
-                getNextEnableDigit();
-                // no more enable digit
-                if (d == -1) {
-                    break;
-                }
-                // backup sudoku before commit
-                char bp_PreCommit[82];
-                getString(bp_PreCommit);
-                // commit this digit
-                TRY++;
-                commitDigit(i, d, true);
-                DEBUG_zombie_committing_digit(i, d);
-                // try to crack
-                bool b = seekDigits_zombie(false, save_answers, print_answer_immediately);
-                // this digit succeed
-                if (b == true) {
-                    // mark zombie-on succeed
-                    zombie_secceed = true;
-                }
-                // revert sudoku to before the commit
-                readin(bp_PreCommit);
-            }
-            // return
-            return rtn__(zombie_secceed);
             break;
     }
-    return false;
+
+    // return
+    return FOUND;
 };
-int Sudoku::crack(bool save_answers, bool print_answer_line_immediately) {
-    seekDigits_zombie(true, save_answers, print_answer_line_immediately);
-    return answer_count;
-};
-int Sudoku::crack(bool save_answers) {
-    return (crack(save_answers, false));
-};
-
-void Sudoku::addAnswer() {
-    answer_count++;
-
-    //-- BigNumb
-    BigNumb::ppBigNumb(ans_c);
-    // stop to record answer when the count is 1e19
-    if (ans_c[1] != 0) {
-        return;
-    }
-    //-- .
-
-    // alloc answers table mem
-    void *p = realloc(answers, answer_count * sizeof(void *));
-    if (p == NULL) {
-        //== .
-        return;
-    }
-    answers = (char **)p;
-
-    // save answer
-    char *ans = new char[82];
-    getString(ans);
-    answers[answer_count - 1] = ans;
-}
-void Sudoku::delAnswer(int i_) {
-    //-- BigNumb
-    BigNumb::mmBigNumb(ans_c);
-    // stop to record answer when the count is 1e19
-    if (ans_c[1] != 0) {
-        answer_count--;
-        return;
-    }
-    //-- .
-
-    // free answer mem
-    delete[] answers[i_];
-    // reorder answers table
-    for (int i = i_ + 1; i < answer_count; i++) {
-        answers[i - 1] = answers[i];
-    }
-    // update count
-    answer_count--;
-    // free table mem
-    void *p = realloc(answers, answer_count * sizeof(void *));
-    if (p == NULL) {
-        //== -
-        return;
-    }
-    answers = (char **)p;
-}
-int Sudoku::cleanAnswers() {
-    // delete all duplicate answers
-
-    //
-    int rept_cnt = 0;
-    for (int a = 0; a < (answer_count - 1); a++) {
-        for (int b = (a + 1); b < answer_count; b++) {
-            if (0 == strcmp(answers[a], answers[b])) {
-                delAnswer(b);
-                b--;
-                rept_cnt++;
-            }
-        }
-    }
-    //
-    return rept_cnt;
-}
-int Sudoku::cleanAnswers(int &before, int &after) {
-    before = answer_count;
-    int rtn = cleanAnswers();
-    after = answer_count;
-    return rtn;
-}
-void Sudoku::clrAnswers() {
-    //
-    for (int i = 0; i < answer_count; i++) {
-        delete[] answers[i];
-    }
-    //
-    free(answers);
-    //
-    answer_count = 0;
-}
-void Sudoku::getString(char *str) {
+void CSudoku::toString(char *str) {
     for (int i = 0; i < 81; i++) {
         str[i] = getDigit(i) + '0';
     }
     str[81] = '\0';
 }
+void CSudoku::toPrettyLine(char *buffer) {
+    // print sudoku as one line to the buffer
+    // style like this: 123 456 789 | 234 567 891 | ...
 
-void Sudoku::printLineTo(char *user_buffer, char *str, char *ch_uncommitted_digit) {
-    // print sudoku string in one line to the buffer
+    // write one char to the buffer
+    char *b = buffer;
+    auto pushB = [&b](char c) { *(b++) = c; };
 
-    // the buffer where will be printed to
-    char output[150] = {0};
-    char *o = output;
-    auto insertOne = [&o](char ch) {
-        *o = ch;
-        o++;
-    };
+    // get the string of this sudoku to write
+    char *str = new char[SIZE_STRING]();
+    toString(str);
+    char *c = str;
 
-    // set the char of uncommitted cell
-    char ch_anyDigit = ' ';
-    if (ch_uncommitted_digit != NULL) {
-        ch_anyDigit = *ch_uncommitted_digit;
+    // set the char of unknow cells
+    for (int i = 0; i < 81; i++) {
+        if (str[i] == '0') {
+            str[i] = '.';
+        }
     }
 
-    // print the digits
-    auto print_ = [&]() {
-        char *pch = str;
-        auto printThreeCells = [&]() {
-            bool is_str_end = false;
-            int i;
-            // print 3 cells of one row of blo
-            for (i = 0; i < 3; i++) {
-                // get the char to print
-                char ch = *pch;
-                if ((ch == '0') || (ch == ch_anyDigit)) {
-                    ch = '.';
-                }
-                // print this char
-                insertOne(ch);
-                // check if the next char is \0
-                pch++;
-                if (*pch == '\0') {
-                    is_str_end = true;
-                    break;
-                }
-            }
-            // print the right blo-space when all 3 cells have been printed
-            if (i == 3) {
-                insertOne(' ');
-            }
-            // reutrn
-            return is_str_end;
-        };
-        auto printOneLine = [&]() {
-            bool is_str_end = false;
-            int i;
-            // print 3 blo-rows of one line
-            for (i = 0; i < 3; i++) {
-                // print one blo-row
-                is_str_end = printThreeCells();
-                // stop print when the next char is \0
-                if (is_str_end == true) {
-                    break;
-                }
-            }
-            // print the right border of the line when all 3 blo-rows have been printed
-            if (i == 3) {
-                insertOne('|');
-                insertOne(' ');
-            }
-            return is_str_end;
-        };
-        // the str is empty
-        if (*pch == '\0') {
-            return;
-        }
-        // print all
-        for (; true;) {
-            bool is_end = printOneLine();
-            if (is_end == true) {
-                break;
-            }
-        }
-    };
-    print_();
+    int c3 = 0;
+    int b3 = 0;
+    for (int i = 0; i < 81; i++) {
+        char ch = *(c++);
+        pushB(ch);
+        c3++;
 
-    // print new line and \0
-    insertOne('\n');
-    insertOne('\0');
+        if (c3 == 3) {
+            c3 = 0;
+            pushB(' ');
+            b3++;
+        }
 
-    // std-printf or export to user-buffer
-    if (user_buffer == NULL) {
-        printf("%s", output);
-    } else {
-        strcpy(user_buffer, output);
+        if (b3 == 3) {
+            b3 = 0;
+            pushB(' ');
+            pushB('|');
+            pushB(' ');
+        }
     }
+
+    b -= 3;
+    pushB('\0');
+    pushB('\0');
+    pushB('\0');
+    delete[] str;
 }
-void Sudoku::printLineTo(char *user_buffer, char *str) {
-    printLineTo(user_buffer, str, &ch_anyDigit);
-};
-void Sudoku::printLineTo(char *user_buffer) {
-    char str[82];
-    getString(str);
-    printLineTo(user_buffer, str, &ch_anyDigit);
-};
+void CSudoku::toPrettyPanel(char *buffer, int gazed_index, int gazed_style) {
+    // print sudoku as one panel to the buffer
+    /* style like this
+"
+ +-----------+-----------+-----------+ \n
+ |  2  6  3  |  5  1  7  |  8  9  4  | \n
+ |  7  8  1  |  9  4  2  |  3  5  6  | \n
+ |  9  4  5  |  8  3  6  |  2  7  1  | \n
+ +-----------+-----------+-----------+ \n
+ |  5  1  8  |  6  9  4  |  7  3  2  | \n
+ |  4  3  9  |  7  2  5  |  1  6  8  | \n
+ |  6  2  7  |  1  8  3  |  5  4  9  | \n
+ +-----------+-----------+-----------+ \n
+ |  1  7  4  |  3  6  8  |  9  2  5  | \n
+ |  3  9  2  |  4  5  1  |  6  8  7  | \n
+ |  8  5  6  |  2  7  9  |  4  1  3  | \n
+ +-----------+-----------+-----------+ \n
+0x0000000147004330 " +-----------+-----------+-----------+ \n |  2  6  3  |  5  1  7  |  8  9  4  | \n |  7  8  1  |  9  4  2  |  3  5  6  | \n |  9  4  5  |  8  3  6  |  2  7  1  | \n +-----------+-----------+-----------+ \n |  5  1  8  |  6  9  4  |  7  3  2  | \n |  4  3  9  |  7  2  5  |  1  6  8  | \n |  6  2  7  |  1  8  3  |  5  4  9  | \n +-----------+-----------+-----------+ \n |  1  7  4  |  3  6  8  |  9  2  5  | \n |  3  9  2  |  4  5  1  |  6  8  7  | \n |  8  5  6  |  2  7  9  |  4  1  3  | \n +-----------+-----------+-----------+ \n"
+"
 
-void Sudoku::printLine(char *str) {
-    printLineTo(NULL, str, &ch_anyDigit);
-};
-void Sudoku::printLine() {
-    char str[82];
-    getString(str);
-    printLineTo(NULL, str, &ch_anyDigit);
-}
 
-void Sudoku::printPanelTo(char *user_buffer, char *str, int i_cur) {
-    // print sudoku string in one panel to the buffer
-
-    /*
-      + --------- +-----------+-----------+
-      | 1   2   3 | 4   5   6 | 7   8   9 |
-      | 1   2   3 | 4   5   6 | 7   8   9 |
-      | 1   2   3 | 4   5   6 | 7   8   9 |
-      + --------- +---------- + --------- +
-      | 1   2   3 | 4   5   6 | 7   8   9 |
-      | 1   2   3 | 4   5   6 | 7   8   9 |
-      | 1   2   3 | 4   5   6 | 7   8   9 |
-      + --------- + --------- + --------- +
-      | 1   2   3 | 4   5   6 | 7   8   9 |
-      | 1   2   3 | 4   5   6 | 7   8   9 |
-      | 1   2   3 | 4   5   6 | 7   8   9 |
-      + --------- + --------- + --------- +
-
-      *-----------*-----------*-----------*
-      | 1   2   3 | 4   5   6 | 7   8   9 |
-      | 1   2   3 | 4   5   6 | 7   8   9 |
-      | 1   2   3 | 4   5   6 | 7   8   9 |
-      *-----------*-----------*-----------*
-      | 1   2   3 | 4   5   6 | 7   8   9 |
-      | 1   2   3 | 4   5   6 | 7   8   9 |
-      | 1   2   3 | 4   5   6 | 7   8   9 |
-      *-----------*-----------*-----------*
-      | 1   2   3 | 4   5   6 | 7   8   9 |
-      | 1   2   3 | 4   5   6 | 7   8   9 |
-      | 1   2   3 | 4   5   6 | 7   8   9 |
-      *-----------*-----------*-----------*
-
-      +-----------+-----------+-----------+
-      | 1   2   3 | 4   5   6 | 7   8   9 |
-      | 1   2   3 | 4   5   6 | 7   8   9 |
-      | 1   2   3 | 4   5   6 | 7   8   9 |
-      +-----------+-----------+-----------+
-      | 1   2   3 | 4   5   6 | 7   8   9 |
-      | 1   2   3 | 4   5   6 | 7   8   9 |
-      | 1   2   3 | 4   5   6 | 7   8   9 |
-      +-----------+-----------+-----------+
-      | 1   2   3 | 4   5   6 | 7   8   9 |
-      | 1   2   3 | 4   5   6 | 7   8   9 |
-      | 1   2   3 | 4   5   6 | 7   8   9 |
-      +-----------+-----------+-----------+
-
-      +-----------+-----------+-----------+
-      |  1  2  3  |  4  5  6  |  7  8  9  |
-      |  1  2  3  |  4  5  6  |  7  8  9  |
-      |  1  2  3  |  4  5  6  |  7  8  9  |
-      +-----------+-----------+-----------+
-      |  1  2  3  |  4  5  6  |  7  8  9  |
-      |  1  2  3  |  4  5  6  |  7  8  9  |
-      |  1  2  3  |  4  5  6  |  7  8  9  |
-      +-----------+-----------+-----------+
-      |  1  2  3  |  4  5  6  |  7  8  9  |
-      |  1  2  3  |  4  5  6  |  7  8  9  |
-      |  1  2  3  |  4  5  6  |  7  8  9  |
-      +-----------+-----------+-----------+
-
-    char temp[] = ""
-                  "+-----------+-----------+-----------+ \n"
-                  "|  1  2  3  |  4  5  6  |  7  8  9  | \n"
-                  "|  1  2  3  |  4  5  6  |  7  8  9  | \n"
-                  "|  1  2  3  |  4  5  6  |  7  8  9  | \n"
-                  "+-----------+-----------+-----------+ \n"
-                  "|  1  2  3  |  4  5  6  |  7  8  9  | \n"
-                  "|  1  2  3  |  4  5  6  |  7  8  9  | \n"
-                  "|  1  2  3  |  4  5  6  |  7  8  9  | \n"
-                  "+-----------+-----------+-----------+ \n"
-                  "|  1  2  3  |  4  5  6  |  7  8  9  | \n"
-                  "|  1  2  3  |  4  5  6  |  7  8  9  | \n"
-                  "|  1  2  3  |  4  5  6  |  7  8  9  | \n"
-                  "+-----------+-----------+-----------+ \n"
-                  ""; // (| :2) ( n :3)*3 ( | :3) ( n :3)*3 ( | :3) ( n :3)*3 ( | :3) (\n:1) :2+3*4*3+1=39
-    */
-    // char charOrder_assicPrintable[] = " !\" #$ % &'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
-    // char charOrder_keyboard[] = " `1234567890-=qwertyuiop[]\\asdfghjkl;'zxcvbnm,./~!@#$%^&*()_+QWERTYUIOP{}|ASDFGHJKL:\"ZXCVBNM<>?";
-
-    // the buffer where will be printed to
-    char output[530] = {0};
-    char *o = output;
-    auto insertOne = [&o](char ch) {
-        *o = ch;
-        o++;
-    };
-
-    // the chars to highlight the gazed cell
-    //           "0123456789"
-    int gi = 1;
-    char gl[] = "<[(>_*|-=~";
-    char gr[] = ">])<_*|-=~";
-    char ch_gaze_l = gl[gi];
-    char ch_gaze_r = gr[gi];
+*/
 
     // the chars to draw the panel
     char ch_space = ' ';
@@ -1177,37 +478,71 @@ void Sudoku::printPanelTo(char *user_buffer, char *str, int i_cur) {
     char ch_horizon = '-';
     char ch_corner = '+';
     char ch_unsure_digit = ' ';
+    char ch_gl;
+    char ch_gr;
+    auto getGazedStyle = [](int gazed_i, char &gl, char &gr) {
+        // highlight style of the gazed cell
+
+        char gls[] = "<[(>_*|-=~";
+        char grs[] = ">])<_*|-=~";
+        int i_max = sizeof(gls) - 1 - 1;
+
+        if (gazed_i < 0) {
+            gazed_i = 0;
+        }
+        if (gazed_i > i_max) {
+            gazed_i = i_max;
+        }
+
+        int i = gazed_i;
+        gl = gls[i];
+        gr = grs[i];
+    };
+    if (gazed_index != -1) {
+        getGazedStyle(gazed_style, ch_gl, ch_gr);
+    } else {
+        ch_gl = ch_space;
+        ch_gr = ch_space;
+    }
+
+    // write one char to the buffer
+    char *b = buffer;
+    auto pushB = [&b](char c) { *(b++) = c; };
+
+    // get the string of sudoku
+    char *str = new char[SIZE_STRING];
+    toString(str);
 
     // print the sudoku panel
     int i = 0;
     char ch_1, ch_2, ch_3;
-    // print 13 lines
-    for (int l13 = 0; l13 < 13; l13++) {
-        // confirm if the line is border
+    // print lines
+    for (int ln = 0; ln < 13; ln++) {
+        // confirm if the current line is border line
         bool border_line = false;
-        if (l13 % 4 == 0) {
+        if (ln % 4 == 0) {
             border_line = true;
         }
 
-        // print left border of the line
+        // print the left border of one line
         ch_1 = ch_vertical;
         if (border_line == true) {
             ch_1 = ch_corner;
         }
-        insertOne(' ');
-        insertOne(ch_1);
+        pushB(' ');
+        pushB(ch_1);
 
         // print 3 blos of one line
-        for (int b3 = 0; b3 < 3; b3++) {
+        for (int bl = 0; bl < 3; bl++) {
             // print left border of one blo
             ch_1 = ch_space;
             if (border_line == true) {
                 ch_1 = ch_horizon;
             }
-            insertOne(ch_1);
+            pushB(ch_1);
 
-            //  print 3 cells of the blo
-            for (int c3 = 0; c3 < 3; c3++) {
+            //  print 3 cells of one blo
+            for (int cl = 0; cl < 3; cl++) {
                 if (border_line == true) {
                     ch_1 = ch_horizon;
                     ch_2 = ch_horizon;
@@ -1215,9 +550,9 @@ void Sudoku::printPanelTo(char *user_buffer, char *str, int i_cur) {
                 } else {
                     ch_1 = ch_space;
                     ch_3 = ch_space;
-                    if (i == i_cur) {
-                        ch_1 = ch_gaze_l;
-                        ch_3 = ch_gaze_r;
+                    if (i == gazed_index) {
+                        ch_1 = ch_gl;
+                        ch_3 = ch_gr;
                     }
                     ch_2 = str[i];
                     if (ch_2 == '0') {
@@ -1225,195 +560,27 @@ void Sudoku::printPanelTo(char *user_buffer, char *str, int i_cur) {
                     }
                     i++;
                 }
-                insertOne(ch_1);
-                insertOne(ch_2);
-                insertOne(ch_3);
+                pushB(ch_1);
+                pushB(ch_2);
+                pushB(ch_3);
             }
-            // print right border of the blo
+            // print the right border of one blo
             ch_1 = ch_space;
             ch_2 = ch_vertical;
             if (border_line == true) {
                 ch_1 = ch_horizon;
                 ch_2 = ch_corner;
             }
-            insertOne(ch_1);
-            insertOne(ch_2);
+            pushB(ch_1);
+            pushB(ch_2);
         }
         // print one line finished
-        insertOne(' ');
-        insertOne('\n');
+        pushB(' ');
+        pushB('\n');
     }
     // print \0
-    insertOne('\0');
+    pushB('\0');
 
     // return
-    if (user_buffer == NULL) {
-        printf("%s", output);
-    } else {
-        strcpy(user_buffer, output);
-    }
-}
-void Sudoku::printPanelTo(char *user_buffer, char *str) {
-    printPanelTo(user_buffer, str, -1);
-};
-void Sudoku::printPanelTo(char *user_buffer, int i_cur) {
-    char str[82];
-    this->getString(str);
-    printPanelTo(user_buffer, str, i_cur);
-};
-void Sudoku::printPanelTo(char *user_buffer) {
-    char str[82];
-    this->getString(str);
-    printPanelTo(user_buffer, str, -1);
-};
-void Sudoku::printPanel(char *str, int i_cur) {
-    printPanelTo(NULL, str, i_cur);
-};
-void Sudoku::printPanel(int i_cur) {
-    //
-    char str[82];
-    getString(str);
-    //
-    printPanelTo(NULL, str, i_cur);
-};
-void Sudoku::printPanel() {
-    //
-    char str[82];
-    getString(str);
-    //
-    printPanelTo(NULL, str, -1);
-};
-
-void Sudoku::printAnswer(int i, bool panel_or_line) {
-    //
-    if (answer_count == 0) {
-        printf("No Answer Data. \n");
-        return;
-    }
-    if (i < 0) {
-        i = 0;
-    }
-    if (i >= answer_count) {
-        i = answer_count - 1;
-    }
-    //
-    if (true == panel_or_line) {
-        printPanel(answers[i], -1);
-    } else {
-        printLine(answers[i]);
-    }
-}
-void Sudoku::printAnswer_panel(int i) {
-    printAnswer(i, true);
-};
-void Sudoku::printAnswer_line(int i) {
-    printAnswer(i, false);
-};
-void Sudoku::printAllAnswers(bool panel_or_line) {
-    for (int i = 0; i < answer_count; i++) {
-        printf("Answers[%d] \n", i);
-        printAnswer(i, panel_or_line);
-    }
-};
-void Sudoku::printAllAnswers_panel() {
-    printAllAnswers(true);
-};
-void Sudoku::printAllAnswers_line() {
-    printAllAnswers(false);
-};
-const char *Sudoku::getAnswerString(int i) {
-    if (i >= answer_count) {
-        return NULL;
-    }
-    return answers[i];
-};
-const char **Sudoku::getAnswerStringArray(int &c) {
-    if (answer_count == 0) {
-        return NULL;
-    }
-    c = answer_count;
-    return ((const char **)answers);
-};
-
-Sudoku::Sudoku() {
-    // initialize conflicts
-    initConflicts();
-    //
-}
-Sudoku::Sudoku(char *str)
-    : Sudoku() {
-    readin(str);
-}
-
-//-- main
-
-void printAllSudoku() {
-    //
-    char *s_ = new char[82]();
-    Sudoku empty_sudoku(s_);
-
-    //
-    time_t t1 = time(NULL);
-    empty_sudoku.crack(false, true);
-    time_t t2 = time(NULL);
-
-    //
-    unsigned long t = t2 - t1;
-    printf("Time: %lu~%lu=%lu \n", t1, t2, t);
-}
-
-int main(int argc, char *argv[]) {
-    // used to debug this class named sudoku during development
-
-    //
-    printAllSudoku();
-    return 0;
-
-    //
-    char tests[20][256] = {
-        "85----2--------48-23--4---63--7------2-9-4-5---9-31----"
-        "-7----9-----8---5---2---6-",
-        "85----2---------8-23--4---6---7--------9-4-5---9--1----"
-        "-7----9-----8---5---2---6-",
-        "1-----7-9----3-5-1----9-----287---------62----9-1----"
-        "35-7--------2--4----4-3-927-",
-        " --------- --------- --------- --------- --------- "
-        "--------- --------- --------- --------- ",
-        "003 500 004 "
-        "780 000 000"
-        "000 806 070"
-        "000 000 000"
-        "400 705 108"
-        "620 003 049"
-        "070 000 020"
-        "090 000 600"
-        "000 209 010",
-    };
-
-    //
-    Sudoku *sdk = new Sudoku();
-    bool b = sdk->readin(tests[3]);
-
-    //
-    if (b == false) {
-        printf(">> Readin falied! \n");
-        return -1;
-    }
-    printf(">> Readin succeed:");
-    sdk->printLine();
-    sdk->printPanel();
-
-    //
-    printf(">> Cracking.......... \n");
-    int i = sdk->crack(false, true);
-    sdk->printAllAnswers_line();
-
-    //
-    system("clear");
-    const char *ans1 = sdk->getAnswerString(0);
-    sdk->readin(ans1);
-    sdk->printPanel(3);
-
-    //
-    return 0;
+    delete[] str;
 }
