@@ -219,6 +219,10 @@ private:
         obo_level = 0;
         obo_found = false;
     };
+    bool loadStr(const char *sudoku_str, bool clr_obo);
+    bool readinOLD(const char *sudoku_str) {
+        return loadStr(sudoku_str, false);
+    };
 
     void toPrettyPanel(char *buffer, int gazed_index, int gazed_style);
 
@@ -232,7 +236,10 @@ public:
     static inline int xy2i(int y, int x) {
         return (y * 9 + x);
     };
-    bool readin(const char *sudoku_str);
+    bool readin(const char *sudoku_str) {
+        return (loadStr(sudoku_str, true));
+    };
+
     int getDigit(int y, int x) {
         limitXY(y, x);
         return digits[y][x];

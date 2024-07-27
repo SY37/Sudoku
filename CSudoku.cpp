@@ -11,7 +11,7 @@ CSudoku::CSudoku(char *str)
     : CSudoku() {
     readin(str);
 }
-bool CSudoku::readin(const char *sudoku_str) {
+bool CSudoku::loadStr(const char *sudoku_str, bool clr_obo) {
     // load sudoku from the string and returns false when the digit-char count is less then 81 or when the sudoku is not right
 
     auto ch2d = [](char ch) {
@@ -65,9 +65,6 @@ bool CSudoku::readin(const char *sudoku_str) {
     // initialize conflicts (to clear the conflicts of the previous sudoku)
     initConflicts();
 
-    // clear the OBO mem of the prev sudoku
-    finaOBO();
-
     // readin
     const char *pch = sudoku_str;
     int digit, index;
@@ -95,15 +92,21 @@ bool CSudoku::readin(const char *sudoku_str) {
         }
     }
 
-    // readin failed
+    // failed
     if ((count < 81) || (BAD_SUDOKU == true)) {
         // revert sudoku
-        readin(bp);
+        loadStr(bp, false);
         // return
         return false;
     }
-    // readin succeed
-    return true;
+    // succeed
+    else {
+        // clear the OBO mem of the prev sudoku
+        if (clr_obo == true) {
+            finaOBO();
+        }
+        return true;
+    }
 }
 void CSudoku::initConflicts() {
     for (int y = 0; y < 9; y++) {
@@ -447,7 +450,7 @@ bool CSudoku::crack(bool init_recursion) {
                     }
                     lv--;
                     // recover sudoku
-                    readin(bp);
+                    readinOLD(bp);
                     delete[] bp;
                 };
             }
@@ -473,7 +476,7 @@ CSudoku *CSudoku::crackOBO() {
             TEST = false;
             // recover sudoku to this level
             char *&bp = LOCAL[LEVEL]->try_bp;
-            SUDOKU->readin(bp);
+            SUDOKU->readinOLD(bp);
             //
             return true;
         } else {
