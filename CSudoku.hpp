@@ -1,4 +1,6 @@
-﻿
+﻿#ifndef __CSUDOKU
+#define __CSUDOKU
+
 #include <cstddef>
 
 class CSudoku;
@@ -26,6 +28,7 @@ private:
     int getDigit(int i) {
         return digits[i / 9][i % 9];
     };
+    bool isDigitRight(int indx);
     void setDigit(int i, int d) {
         digits[i / 9][i % 9] = d;
     };
@@ -167,12 +170,55 @@ private:
     void clrMatesStatus(int indx, int prev_digit) {
         clrOrMarkMates(indx, true, prev_digit);
     };
-    //-- -
+
     PFvoid_pSudoku __whenCrackBingo = NULL;
     static void __whenCrackBingo_(CSudoku *this_) {
         ;
     }
     bool crack(bool init_recursion);
+
+    struct COBOLocal {
+        char try_indx = -1;
+        char try_digt = 0;
+        char *try_bp = nullptr;
+    };
+    COBOLocal **obo_local = nullptr;
+    CSudoku *obo_suduku = nullptr;
+    char obo_level = 0;
+    bool obo_found = false;
+    void initOBO() {
+        if (obo_local == nullptr) {
+            obo_local = new COBOLocal *[82];
+            for (int i = 0; i < 82; i++) {
+                obo_local[i] = nullptr;
+            }
+        }
+        if (obo_suduku == nullptr) {
+            obo_suduku = new CSudoku(*this);
+        }
+    };
+    void finaOBO() {
+        // LOCAL
+        if (obo_local != nullptr) {
+            for (int i = 0; i < 82; i++) {
+                if (obo_local[i] != nullptr) {
+                    delete[] obo_local[i]->try_bp;
+                    obo_local[i]->try_bp = nullptr;
+                    delete obo_local[i];
+                    obo_local[i] = nullptr;
+                }
+            }
+            obo_local = nullptr;
+        }
+        // Sudoku
+        if (obo_suduku != nullptr) {
+            delete obo_suduku;
+            obo_suduku = nullptr;
+        }
+        // VAR
+        obo_level = 0;
+        obo_found = false;
+    };
 
     void toPrettyPanel(char *buffer, int gazed_index, int gazed_style);
 
@@ -210,6 +256,8 @@ public:
         int i = xy2i(y, x);
         commitCell(i, d);
     };
+    bool hasWrong();
+    bool isBingo();
     enum EnumSudokuStatus {
         SUDOKU_BAD = -1,
         SUDOKU_UNSURE = 0,
@@ -222,6 +270,12 @@ public:
     void setCall_CrackBingo(PFvoid_pSudoku pfunc) {
         __whenCrackBingo = pfunc;
     }
+    // get sudoku answers one by one, remember to call `closeOBO()` when no additional answers are needed.
+    CSudoku *crackOBO();
+    // free memory of `crackOBO()` used.
+    void closeOBO() {
+        finaOBO();
+    };
 
     static const int SIZE_STRING = 82;
     void toString(char *str);
@@ -244,3 +298,5 @@ public:
         toPrettyPanel(buffer, i, gazed_style);
     };
 };
+
+#endif

@@ -1,5 +1,6 @@
 ﻿
-#include "Sudoku.hpp"
+#include "CSudoku.hpp"
+#include <cstddef>
 
 CSudoku::CSudoku() {
 
@@ -8,7 +9,6 @@ CSudoku::CSudoku() {
 }
 CSudoku::CSudoku(char *str)
     : CSudoku() {
-
     readin(str);
 }
 bool CSudoku::readin(const char *sudoku_str) {
@@ -65,6 +65,9 @@ bool CSudoku::readin(const char *sudoku_str) {
     // initialize conflicts (to clear the conflicts of the previous sudoku)
     initConflicts();
 
+    // clear the OBO mem of the prev sudoku
+    finaOBO();
+
     // readin
     const char *pch = sudoku_str;
     int digit, index;
@@ -116,10 +119,10 @@ void CSudoku::initConflicts() {
         }
     }
 };
-void CSudoku::clrOrMarkMates(int indx, bool clrOrMark, int prev_digit) {
+void CSudoku::clrOrMarkMates(int indx, bool clr_or_mark, int prev_digit) {
     // clear status of of mate-cells and set digit to `0`
 
-    bool &clrMode = clrOrMark;
+    bool &clrMode = clr_or_mark;
     int now_digt = getDigit(indx);
 
     // the previous digit is `0`, this means it marked no status before, so nothing need to do.
@@ -128,7 +131,7 @@ void CSudoku::clrOrMarkMates(int indx, bool clrOrMark, int prev_digit) {
     }
 
     // clear or mark this digit status of mate-cells
-    auto clrOrMarkStatus = [&](int mate_i, int range) {
+    auto clrOrMark = [&](int mate_i, int range) {
         // clr mode
         if (clrMode == true) {
             // if the digit of mate-cell was disabled by self-cell then cancel it
@@ -197,7 +200,7 @@ void CSudoku::clrOrMarkMates(int indx, bool clrOrMark, int prev_digit) {
             if (mate_i == indx) {
                 continue;
             }
-            clrOrMarkStatus(mate_i, range);
+            clrOrMark(mate_i, range);
         }
     }
 };
@@ -331,6 +334,64 @@ CSudoku::EnumSudokuStatus CSudoku::commitAllCertains() {
         return SUDOKU_UNSURE;
     }
 };
+
+bool CSudoku::isDigitRight(int indx) {
+    // check if the committed digit is right
+    // notice that make sure all cells have been committed
+
+    // get the committed digit
+    int digt = getDigit(indx);
+
+    // cmp with mate-cells
+    for (int r = RANGE_ROW; r < RANGE_BLO; r++) {
+        int fi = rangeFirst(indx, r);
+        for (int n = 0; n < 9; n++) {
+            int mi = inRange(fi, n, r);
+            // skip self
+            if (mi == indx) {
+                continue;
+            }
+            // the same digit as mate
+            if (digt == getDigit(mi)) {
+                // reutrn this digit isnot right
+                return false;
+            }
+        }
+    }
+
+    // the digit is right
+    return true;
+};
+bool CSudoku::isBingo() {
+    // check if the sudoku is a answer
+
+    for (int i = 0; i < 81; i++) {
+        int d = getDigit(i);
+        if (d == 0) {
+            return false;
+        }
+        if (false == isDigitRight(i)) {
+            return false;
+        }
+    }
+
+    return true;
+};
+bool CSudoku::hasWrong() {
+    // check if any committed cell is wrong
+
+    for (int i = 0; i < 81; i++) {
+        int d = getDigit(i);
+        if (d == 0) {
+            continue;
+        }
+        if (false == isDigitEnabled(i, d)) {
+            return true;
+        }
+    }
+    return false;
+};
+
 bool CSudoku::crack(bool init_recursion) {
 
     static int answer_count;
@@ -396,6 +457,117 @@ bool CSudoku::crack(bool init_recursion) {
     // return
     return FOUND;
 };
+CSudoku *CSudoku::crackOBO() {
+
+    COBOLocal **&LOCAL = obo_local;
+    CSudoku *&SUDOKU = obo_suduku;
+    char &LEVEL = obo_level;
+    bool &FOUND = obo_found;
+    bool TEST = true;
+
+    auto goUpLevel = [&]() {
+        // go back to prev recursion level
+        if (LEVEL > 0) {
+            // update level
+            LEVEL--;
+            TEST = false;
+            // recover sudoku to this level
+            char *&bp = LOCAL[LEVEL]->try_bp;
+            SUDOKU->readin(bp);
+            //
+            return true;
+        } else {
+            // cant go back, cos no more level in the front
+            finaOBO();
+            return false;
+        }
+    };
+
+    initOBO();
+    // check last return, if it found answer
+    if (FOUND == true) {
+        FOUND = false;
+        if (false == goUpLevel()) {
+            return nullptr;
+        }
+    }
+    // zombie on
+    while (true) {
+        if (TEST) {
+            int sudoku_status = SUDOKU->commitAllCertains();
+            if (sudoku_status == SUDOKU_BINGO) {
+                FOUND = true;
+                return SUDOKU;
+            }
+            if (sudoku_status == SUDOKU_BAD) {
+                if (false == goUpLevel()) {
+                    return nullptr;
+                }
+            }
+        }
+
+        // beginning of this level
+        if (LOCAL[LEVEL] == nullptr) {
+            // init var
+            LOCAL[LEVEL] = new COBOLocal();
+            // get the cell index of this level
+            char &i = LOCAL[LEVEL]->try_indx;
+            int iB = 0;
+            if (LEVEL > 0) {
+                iB = LOCAL[LEVEL - 1]->try_indx + 1;
+            }
+            for (i = iB; i < 81; i++) {
+                if (0 == SUDOKU->getDigit(i)) {
+                    break;
+                }
+            }
+            // backpu current sudoku before testing some digits
+            char *&b = LOCAL[LEVEL]->try_bp;
+            b = new char[82];
+            SUDOKU->toString(b);
+            //
+            char &d = LOCAL[LEVEL]->try_digt;
+            d = 0;
+        }
+        char &cur_indx = LOCAL[LEVEL]->try_indx;
+        char &cur_digt = LOCAL[LEVEL]->try_digt;
+        char *&bp = LOCAL[LEVEL]->try_bp;
+
+        // get one enabled digit of this cell to test
+        cur_digt++;
+        for (; cur_digt <= 9; cur_digt++) {
+            if (true == SUDOKU->isDigitEnabled(cur_indx, cur_digt)) {
+                break;
+            }
+        }
+        // try this digit
+        if (cur_digt <= 9) {
+            // commit it
+            SUDOKU->commitCell(cur_indx, cur_digt);
+            // goto the next level
+            TEST = true;
+            LEVEL++;
+            continue;
+        }
+
+        // ending of this level
+        if (cur_digt > 9) {
+            // clear local var
+            cur_indx = -1;
+            cur_digt = 0;
+            delete[] bp;
+            bp = nullptr;
+            delete LOCAL[LEVEL];
+            LOCAL[LEVEL] = nullptr;
+            // go back to the prev level
+            if (false == goUpLevel()) {
+                return nullptr;
+            }
+            continue;
+        }
+    }
+};
+
 void CSudoku::toString(char *str) {
     for (int i = 0; i < 81; i++) {
         str[i] = getDigit(i) + '0';
